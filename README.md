@@ -1,6 +1,6 @@
 # dryer
 
-dryer finds candidate duplicate code in Clojure, Java, Go, TypeScript, Rust, and Python. One run detects the language of each source file, normalizes that language's forms, and reports pairs whose structure is close enough to review.
+dryer finds candidate duplicate code in Clojure, Java, Go, TypeScript, Rust, Python, and Kotlin. One run detects the language of each source file, normalizes that language's forms, and reports pairs whose structure is close enough to review.
 
 Clojure follows [dry4clj](https://github.com/unclebob/dry4clj). The other languages use the same idea on the functions and methods [crapper](https://github.com/unclebob/crapper) and [mutator](https://github.com/unclebob/mutator) already treat as one unit. A form is only compared with forms written in the same language.
 
@@ -37,6 +37,13 @@ int alpha(int[] xs) {
 def beta(items):
     kept = filter(items, even)
     return map(kept, dec)
+```
+
+```kotlin
+fun beta(items: IntArray): IntArray {
+    val kept = filter(items, even)
+    return map(kept, dec)
+}
 ```
 
 What stays is the call or method name, the operator, and the shape of the tree. What drops out is the local name, the field name, the literal, and the keyword. A Clojure keyword call `(:kind m)` and `(:id row)` is the same shape. So is `order.total` and `row.amount`.
@@ -101,8 +108,9 @@ DUPLICATE score=0.89
 | TypeScript | functions, methods, and top-level arrow functions | callbacks nested inside another function |
 | Rust | functions and methods with a body | functions inside `mod tests`, and closures |
 | Python | functions and methods | functions nested inside another function |
+| Kotlin | functions and methods with a body, property getters and setters with a body, and a lambda or anonymous function assigned directly to a property | constructors, `init` blocks, abstract functions, and lambdas nested inside a function |
 
-Clojure reader conditionals keep the `:clj` branch, as dry4clj does. Syntax-quote is kept as a `syntax-quote` form rather than expanded.
+Clojure reader conditionals keep the `:clj` branch, as dry4clj does. Syntax-quote is kept as a `syntax-quote` form rather than expanded. A Kotlin lambda nested in a function stays part of that function. Names on both sides of `::` stay, so a local used as that receiver is not normalized away.
 
 A missing or unreadable Clojure form is reported on stderr. Forms read before it are still compared. The run exits `0` after a report, `1` on a usage error, and `2` on an unknown `--format`.
 

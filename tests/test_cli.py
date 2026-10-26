@@ -30,6 +30,8 @@ def test_language_detection():
     assert language_of("ui/view.tsx") == "typescript"
     assert language_of("src/lib.rs") == "rust"
     assert language_of("src/dryer/cli.py") == "python"
+    assert language_of("src/App.kt") == "kotlin"
+    assert language_of("build.gradle.kts") == "kotlin"
     assert language_of("types.d.ts") is None
     assert language_of("notes.md") is None
 
@@ -338,8 +340,11 @@ def test_test_files_and_skipped_directories_are_left_out(tmp_path):
     write_source(tmp_path, "src/app.test.cts", "export {}\n")
     write_source(tmp_path, "src/app.spec.cts", "export {}\n")
     write_source(tmp_path, "src/widget.cts", "export {}\n")
+    write_source(tmp_path, "src/App.kt", "fun alpha() = 1\n")
+    write_source(tmp_path, "src/test/Hidden.kt", "fun alpha() = 1\n")
+    write_source(tmp_path, "build.gradle.kts", "fun alpha() = 1\n")
     relative = [path.relative_to(tmp_path).as_posix() for path in iter_source_files([tmp_path])]
-    assert sorted(relative) == ["src/app.py", "src/widget.cts"]
+    assert sorted(relative) == ["build.gradle.kts", "src/App.kt", "src/app.py", "src/widget.cts"]
 
 
 def test_a_second_report_replaces_the_snapshot(tmp_path, capsys):

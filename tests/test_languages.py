@@ -111,6 +111,20 @@ pub fn beta(items: Vec<i32>) -> Vec<i32> {
 }
 """
 
+KOTLIN_LEFT = """\
+fun alpha(xs: IntArray): IntArray {
+    val ys = filter(xs, odd)
+    return map(ys, inc)
+}
+"""
+
+KOTLIN_RIGHT = """\
+fun beta(items: IntArray): IntArray {
+    val kept = filter(items, even)
+    return map(kept, dec)
+}
+"""
+
 
 def test_each_language_matches_renamed_locals(tmp_path):
     samples = {
@@ -126,6 +140,8 @@ def test_each_language_matches_renamed_locals(tmp_path):
         "right.tsx": TSX_RIGHT,
         "left.rs": RUST_LEFT,
         "right.rs": RUST_RIGHT,
+        "left.kt": KOTLIN_LEFT,
+        "right.kt": KOTLIN_RIGHT,
     }
     for name, source in samples.items():
         write_source(tmp_path, name, source)
@@ -133,7 +149,7 @@ def test_each_language_matches_renamed_locals(tmp_path):
     by_language = {}
     for item in found:
         by_language.setdefault(item.language, []).append(item)
-    assert set(by_language) == {"java", "go", "python", "typescript", "rust"}
+    assert set(by_language) == {"java", "go", "python", "typescript", "rust", "kotlin"}
     assert [(item.left.file, item.right.file) for item in by_language["typescript"]] == [
         ("left.ts", "right.ts"),
         ("left.tsx", "right.tsx"),
@@ -237,7 +253,14 @@ class Right {
 
 
 def _suffix(language: str) -> str:
-    return {"python": "py", "go": "go", "rust": "rs", "java": "java", "typescript": "ts"}[language]
+    return {
+        "python": "py",
+        "go": "go",
+        "rust": "rs",
+        "java": "java",
+        "typescript": "ts",
+        "kotlin": "kt",
+    }[language]
 
 
 def test_callee_names_stay_and_member_names_do_not(tmp_path):
@@ -308,6 +331,18 @@ export function beta(items: number[]): number {
   return foo<number>(items.baz);
 }
 """,
+        "left.kt": """\
+fun alpha(xs: List<Int>): Int {
+    val ys = xs.filter(odd)
+    return (len)(xs.total)
+}
+""",
+        "right.kt": """\
+fun beta(items: List<Int>): Int {
+    val kept = items.filter(even)
+    return (len)(items.count)
+}
+""",
     }
     for name, source in samples.items():
         write_source(tmp_path, name, source)
@@ -315,7 +350,7 @@ export function beta(items: number[]): number {
     by_language = {}
     for item in found:
         by_language.setdefault(item.language, []).append(item)
-    assert set(by_language) == {"python", "go", "rust", "java", "typescript"}
+    assert set(by_language) == {"python", "go", "rust", "java", "typescript", "kotlin"}
     for language, group in by_language.items():
         assert [(item.left.file, item.right.file, item.score) for item in group] == [
             (f"left.{_suffix(language)}", f"right.{_suffix(language)}", 1.0)
@@ -399,6 +434,20 @@ class Left {
     assert "new" in rust_names
     assert "HashMap" in rust_names
     assert "ArrayList" in java_names
+    kotlin = forms(
+        "kotlin",
+        """\
+fun alpha(): List<String> {
+    val ys = ArrayList<String>()
+    ys.add(ys)
+    return ys
+}
+""",
+        "a.kt",
+    )
+    kotlin_names = " ".join(kotlin[0].fingerprints)
+    assert "ArrayList" in kotlin_names
+    assert "add" in kotlin_names
 
 
 def test_a_class_contributes_its_method_only():
@@ -541,6 +590,191 @@ export class Box {
     printed = " ".join(item for entry in entries for item in entry.fingerprints)
     assert "#total" not in printed
     assert "#hidden" not in printed
+
+
+def test_kotlin_keeps_bodies_and_skips_declarations_and_nested_functions():
+    assert spans(
+        "kotlin",
+        """\
+abstract class Left {
+    abstract fun declared(xs: IntArray): Int
+    fun alpha(xs: IntArray): Int {
+        class Inner {
+            fun run(ys: IntArray): Int = ys.size
+        }
+        return xs.size
+    }
+    constructor(xs: Int) {
+        println(xs)
+    }
+    init {
+        println(1)
+    }
+}
+""",
+        "a.kt",
+    ) == [(3, 8)]
+
+
+def test_kotlin_property_lambda_and_getter_are_candidates():
+    assert spans(
+        "kotlin",
+        """\
+val alpha = { xs: Int ->
+    xs
+}
+
+class Box {
+    val gamma = { xs: Int -> xs }
+    val total: Int
+        get() = field + 1
+    var name: String = ""
+        set(value) {
+            field = value.trim()
+        }
+    fun run(xs: Int): Int = xs
+}
+
+fun beta(items: List<Int>): List<Int> {
+    val f = { ys: Int -> ys }
+    return items
+}
+""",
+        "a.kt",
+    ) == [(1, 3), (6, 6), (8, 8), (10, 12), (13, 13), (16, 19)]
+
+
+def test_kotlin_lambda_inside_a_call_is_not_its_own_candidate():
+    assert spans("kotlin", "val beta = items.map { it + 1 }\n", "a.kt") == []
+
+
+def test_kotlin_anonymous_function_assigned_to_a_property_is_a_candidate():
+    assert spans(
+        "kotlin",
+        "val alpha = fun(xs: Int): Int = xs\n",
+        "a.kt",
+    ) == [(1, 1)]
+
+
+def test_kotlin_script_files_are_compared(tmp_path):
+    write_source(tmp_path, "left.kts", KOTLIN_LEFT)
+    write_source(tmp_path, "right.kts", KOTLIN_RIGHT)
+    found = pairs(tmp_path)
+    assert len(found) == 1
+    assert found[0].language == "kotlin"
+    assert found[0].score == 1.0
+    assert (found[0].left.file, found[0].right.file) == ("left.kts", "right.kts")
+
+
+def test_kotlin_number_literals_match_a_string_literal():
+    samples = [
+        forms("kotlin", 'fun alpha() = "xs"\n', "a.kt"),
+        forms("kotlin", "fun beta() = 1L\n", "b.kt"),
+        forms("kotlin", "fun gamma() = 1.5\n", "c.kt"),
+        forms("kotlin", "fun delta() = 1u\n", "d.kt"),
+    ]
+    entries = [item[0] for item in samples]
+    found = find_duplicates(entries, 0.99)
+    assert len(found) == 6
+    assert all(item.score == 1.0 for item in found)
+
+
+def test_kotlin_comments_are_not_part_of_the_structure():
+    commented = forms(
+        "kotlin",
+        """\
+fun alpha(xs: Int): Int {
+    // note
+    /* block */
+    return xs + 1
+}
+""",
+        "a.kt",
+    )
+    plain = forms(
+        "kotlin",
+        """\
+fun beta(items: Int): Int {
+    return items + 1
+}
+""",
+        "b.kt",
+    )
+    found = find_duplicates(commented + plain, 0.99)
+    assert len(found) == 1
+    assert found[0].score == 1.0
+
+
+def test_kotlin_interpolated_string_is_not_a_plain_literal():
+    plain = forms("kotlin", 'fun alpha(xs: Int) = "xs"\n', "a.kt")
+    interpolated = forms("kotlin", 'fun beta(items: Int) = "$items"\n', "b.kt")
+    found = find_duplicates(plain + interpolated, 0.0)
+    assert len(found) == 1
+    assert found[0].score < 1.0
+
+
+def test_kotlin_keeps_only_the_called_name_in_a_chain():
+    left = forms("kotlin", "fun alpha() = a.b.c()\n", "a.kt")
+    right = forms("kotlin", "fun beta() = x.y.c()\n", "b.kt")
+    other = forms("kotlin", "fun gamma() = a.b.d()\n", "c.kt")
+    assert find_duplicates(left + right, 0.99)[0].score == 1.0
+    assert find_duplicates(left + other, 0.0)[0].score < 1.0
+
+
+def test_kotlin_parenthesized_callee_matches_the_bare_call():
+    wrapped = forms("kotlin", "fun alpha(xs: Int): Int = (len)(xs)\n", "a.kt")
+    bare = forms("kotlin", "fun beta(items: Int): Int = len(items)\n", "b.kt")
+    assert any("len" in item for item in wrapped[0].fingerprints)
+    found = find_duplicates(wrapped + bare, 0.99)
+    assert len(found) == 1
+    assert found[0].score == 1.0
+
+
+def test_kotlin_callable_reference_keeps_both_names():
+    left = forms("kotlin", "fun alpha(): Any = String::length\n", "a.kt")
+    right = forms("kotlin", "fun beta(): Any = Int::length\n", "b.kt")
+    names = " ".join(left[0].fingerprints)
+    assert "String" in names
+    assert "length" in names
+    found = find_duplicates(left + right, 0.0)
+    assert len(found) == 1
+    assert found[0].score < 1.0
+    chain = forms("kotlin", "fun gamma(): Any = foo.bar::baz\n", "c.kt")
+    chain_names = " ".join(chain[0].fingerprints)
+    assert "foo" in chain_names
+    assert "bar" in chain_names
+    assert "baz" in chain_names
+    bound = forms(
+        "kotlin",
+        """\
+fun delta() {
+    val member = xs::size
+    val unbound = ::length
+}
+""",
+        "d.kt",
+    )
+    bound_names = " ".join(bound[0].fingerprints)
+    assert "xs" in bound_names
+    assert "size" in bound_names
+    assert "length" in bound_names
+
+
+def test_kotlin_safe_call_differs_from_a_plain_call():
+    plain = forms("kotlin", "fun alpha(xs: Int): Int = xs.filter(odd)\n", "a.kt")
+    safe = forms("kotlin", "fun beta(items: Int): Int = items?.filter(even)\n", "b.kt")
+    found = find_duplicates(plain + safe, 0.0)
+    assert len(found) == 1
+    assert found[0].score < 1.0
+
+
+def test_kotlin_infix_name_stays():
+    same = forms("kotlin", "fun alpha(xs: Int): Int = xs until 10\n", "a.kt")
+    renamed = forms("kotlin", "fun beta(items: Int): Int = items until 3\n", "b.kt")
+    other = forms("kotlin", "fun gamma(rows: Int): Int = rows to 10\n", "c.kt")
+    assert "until" in " ".join(same[0].fingerprints)
+    assert find_duplicates(same + renamed, 0.99)[0].score == 1.0
+    assert find_duplicates(same + other, 0.0)[0].score < 1.0
 
 
 def test_end_line_uses_the_last_occupied_row():

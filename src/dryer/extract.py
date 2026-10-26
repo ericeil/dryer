@@ -3,7 +3,9 @@
 Clojure compares every top-level list except `ns`, matching dry4clj. The other
 languages compare the functions and methods crapper scores: bodies, not
 signatures alone, and not callbacks nested inside another function. Rust
-functions inside `mod tests` are test code and are skipped.
+functions inside `mod tests` are test code and are skipped. Kotlin also
+compares property getters and setters, and a lambda or anonymous function
+assigned directly to a property.
 """
 
 from __future__ import annotations
@@ -143,12 +145,55 @@ def _rust_nodes(data: bytes, root) -> list:
     return found
 
 
+_KOTLIN_NEST = {
+    "function_declaration",
+    "anonymous_function",
+    "lambda_literal",
+    "getter",
+    "setter",
+    "secondary_constructor",
+    "anonymous_initializer",
+}
+
+
+def _kotlin_function(node) -> bool:
+    """A function, getter, or setter with a body that is not nested in one."""
+
+    if not _has(node, "function_body"):
+        return False
+    return not _inside(node, _KOTLIN_NEST)
+
+
+def _kotlin_binding(node):
+    """A property a lambda is assigned to, when that property is not inside a function."""
+
+    parent = node.parent
+    if parent is None or parent.type != "property_declaration":
+        return None
+    if _inside(parent, _KOTLIN_NEST):
+        return None
+    return parent
+
+
+def _kotlin_nodes(data: bytes, root) -> list:
+    found = []
+    for node in descendants(root):
+        if node.type in {"function_declaration", "getter", "setter"} and _kotlin_function(node):
+            found.append(node)
+        elif node.type in {"lambda_literal", "anonymous_function"}:
+            binding = _kotlin_binding(node)
+            if binding is not None:
+                found.append(binding)
+    return found
+
+
 _PICKERS = {
     "java": ("java", _java_nodes),
     "go": ("go", _go_nodes),
     "python": ("python", _python_nodes),
     "typescript": (_grammar, _typescript_nodes),
     "rust": ("rust", _rust_nodes),
+    "kotlin": ("kotlin", _kotlin_nodes),
 }
 
 
