@@ -1,7 +1,7 @@
 """Find source files and decide which language each one is written in.
 
 The extensions and the skipped directories match crapper and mutator, with
-`.cljd` added because dry4clj reads it.
+`.cljd` added because dry4clj reads it and `.kt` / `.kts` added for Kotlin.
 """
 
 import os
@@ -21,6 +21,8 @@ EXTENSIONS = {
     ".cts": "typescript",
     ".rs": "rust",
     ".py": "python",
+    ".kt": "kotlin",
+    ".kts": "kotlin",
 }
 
 SKIP_DIRS = {
