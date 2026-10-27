@@ -340,7 +340,7 @@ fun alpha(xs: List<Int>): Int {
         "right.kt": """\
 fun beta(items: List<Int>): Int {
     val kept = items.filter(even)
-    return (len)(items.count)
+    return (len)(items.total)
 }
 """,
     }
@@ -713,12 +713,17 @@ def test_kotlin_interpolated_string_is_not_a_plain_literal():
     assert found[0].score < 1.0
 
 
-def test_kotlin_keeps_only_the_called_name_in_a_chain():
-    left = forms("kotlin", "fun alpha() = a.b.c()\n", "a.kt")
-    right = forms("kotlin", "fun beta() = x.y.c()\n", "b.kt")
-    other = forms("kotlin", "fun gamma() = a.b.d()\n", "c.kt")
+def test_kotlin_keeps_member_names_and_drops_the_local_receiver():
+    left = forms("kotlin", "fun alpha(a: Foo) = a.b.c()\n", "a.kt")
+    right = forms("kotlin", "fun beta(x: Foo) = x.b.c()\n", "b.kt")
+    other_member = forms("kotlin", "fun gamma(a: Foo) = a.q.c()\n", "c.kt")
+    other_call = forms("kotlin", "fun delta(a: Foo) = a.b.d()\n", "d.kt")
+    names = " ".join(left[0].fingerprints)
+    assert "b" in names
+    assert "c" in names
     assert find_duplicates(left + right, 0.99)[0].score == 1.0
-    assert find_duplicates(left + other, 0.0)[0].score < 1.0
+    assert find_duplicates(left + other_member, 0.0)[0].score < 1.0
+    assert find_duplicates(left + other_call, 0.0)[0].score < 1.0
 
 
 def test_kotlin_parenthesized_callee_matches_the_bare_call():

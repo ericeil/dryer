@@ -1,13 +1,15 @@
 """Normalize a tree-sitter tree the way dry4clj normalizes a Clojure form.
 
 The name in call position stays: `filter`, `Println`, `map`, an operator, the
-type constructed by `new`. Local names, field names, type names in argument
-position, and literals become generic markers. Two functions that call the
-same operations in the same shape therefore share a fingerprint set even when
-their locals differ.
+type constructed by `new`. Local names, type names in argument position, and
+literals become generic markers. Field names drop too, except in Kotlin: the
+member of a qualified access stays, and so does a bare property name. A value
+passed to a call still drops, so `filter(xs, odd)` and `filter(items, even)`
+match. Two functions that call the same operations in the same shape therefore
+share a fingerprint set even when their locals differ.
 
 Kotlin puts the arguments of a call in `call_suffix`. A navigation suffix keeps
-its name when it is the thing being called, or when it is a `::` reference.
+its member name. A `::` reference keeps both sides.
 """
 
 from __future__ import annotations
@@ -156,13 +158,17 @@ _INTERPOLATED = {
 }
 
 _DATA: bytes = b""
+# Kotlin only. None leaves every other language on the path that drops names.
+_LOCALS: set[str] | None = None
+_BINDERS: set[int] | None = None
 
 
 def normalize(node, data: bytes):
     """Normalized tree for `node`, or None when the node is only punctuation."""
 
-    global _DATA
+    global _DATA, _LOCALS, _BINDERS
     _DATA = data
+    _LOCALS, _BINDERS = _kotlin_bindings(node)
     return _normalize(node)
 
 
@@ -206,9 +212,91 @@ def _callee_leaf(node):
     return _PENDING
 
 
+def _binder_name(node):
+    """The simple name a Kotlin binder introduces, when this node is one."""
+
+    if node.type not in {
+        "parameter",
+        "parameter_with_optional_type",
+        "variable_declaration",
+        "catch_block",
+        "function_declaration",
+    }:
+        return None
+    for child in node.named_children:
+        if child.type == "simple_identifier":
+            return child
+    return None
+
+
+def _kotlin_bindings(node):
+    """Names bound in a Kotlin form, and the nodes that bind them.
+
+    `(None, None)` means this tree has no Kotlin identifier, so other
+    languages keep dropping every non-call name. `it` is the implicit lambda
+    parameter. `field` is the implicit name in a getter or setter.
+    """
+
+    names: set[str] = set()
+    binders: set[int] = set()
+    saw = False
+    stack = [node]
+    while stack:
+        current = stack.pop()
+        if current.type == "simple_identifier":
+            saw = True
+        elif current.type == "lambda_literal":
+            if not any(child.type == "lambda_parameters" for child in current.named_children):
+                names.add("it")
+        elif current.type in {"getter", "setter"}:
+            names.add("field")
+        ident = _binder_name(current)
+        if ident is not None:
+            names.add(_text(ident))
+            binders.add(ident.id)
+        stack.extend(current.children)
+    if not saw:
+        return None, None
+    return names, binders
+
+
+def _is_argument_label(node) -> bool:
+    """The name before `=` in a named argument. It names the parameter being set."""
+
+    parent = node.parent
+    if parent is None or parent.type != "value_argument":
+        return False
+    if not any(child.type == "=" for child in parent.children):
+        return False
+    named = parent.named_children
+    return bool(named) and named[0].id == node.id
+
+
+def _keep_kotlin_name(node) -> bool:
+    """Keep a bare Kotlin property name. Drop locals and values passed to calls.
+
+    `emptyByteArray` and `emptyShortArray` are different forms. `filter(xs, odd)`
+    and `filter(items, even)` are not: the predicate is an argument value.
+    Qualified member names are kept by the navigation suffix, not here.
+    """
+
+    if _LOCALS is None or _BINDERS is None or node.type != "simple_identifier":
+        return False
+    if node.id in _BINDERS:
+        return False
+    if _is_argument_label(node):
+        return True
+    if _text(node) in _LOCALS:
+        return False
+    parent = node.parent
+    if parent is not None and parent.type == "value_argument":
+        return False
+    return True
+
+
 def _named_leaf(node, head: bool):
     if node.type in _IDENTIFIERS:
-        if head:
+        if head or _keep_kotlin_name(node):
             return [K("symbol"), _text(node)]
         return K("symbol")
     if _is_literal(node):
@@ -312,12 +400,6 @@ def _reference_suffix(suffix) -> bool:
     return suffix is not None and any(child.type == "::" for child in suffix.children)
 
 
-def _keeps_suffix_name(suffix, head: bool) -> bool:
-    if _reference_suffix(suffix):
-        return True
-    return head
-
-
 def _suffix_child_kept(child) -> bool:
     return child.is_named or child.type in _OPERATORS
 
@@ -332,7 +414,7 @@ def _navigation_object_mode(obj, reference: bool):
     return "norm", False
 
 
-def _navigation_jobs(node, head: bool, keep_receiver: bool = False):
+def _navigation_jobs(node, _head: bool, keep_receiver: bool = False):
     objects, suffix = _navigation_parts(node)
     reference = keep_receiver or _reference_suffix(suffix)
     jobs = []
@@ -341,11 +423,12 @@ def _navigation_jobs(node, head: bool, keep_receiver: bool = False):
         jobs.append((obj, mode, is_head))
     if suffix is None:
         return jobs
-    keep_name = reference or _keeps_suffix_name(suffix, head)
+    # The member name stays even when this navigation is not the call, so
+    # `cvc5.q.copy` and `cvc5.nonlin.copy` stay distinct. The receiver is
+    # still normalized, so a local to the left of the dot drops.
     for child in suffix.children:
         if child.type in _IDENTIFIERS:
-            if keep_name:
-                jobs.append((child, "callee", False))
+            jobs.append((child, "callee", False))
             continue
         if _suffix_child_kept(child):
             jobs.append((child, "norm", False))
@@ -496,7 +579,7 @@ def _assemble_path(node, cache):
     return parts
 
 
-def _assemble_navigation(node, head: bool, cache, keep_receiver: bool = False):
+def _assemble_navigation(node, _head: bool, cache, keep_receiver: bool = False):
     objects, suffix = _navigation_parts(node)
     reference = keep_receiver or _reference_suffix(suffix)
     parts = [K(node.type)]
@@ -507,13 +590,9 @@ def _assemble_navigation(node, head: bool, cache, keep_receiver: bool = False):
             parts.append(norm)
     if suffix is None:
         return parts
-    keep_name = reference or _keeps_suffix_name(suffix, head)
     for child in suffix.children:
         if child.type in _IDENTIFIERS:
-            if keep_name:
-                parts.append(cache[(id(child), "callee", False)])
-            else:
-                parts.append(K("symbol"))
+            parts.append(cache[(id(child), "callee", False)])
             continue
         if _suffix_child_kept(child):
             norm = cache[(id(child), "norm", False)]

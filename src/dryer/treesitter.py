@@ -40,6 +40,23 @@ def descendants(node):
         stack.extend(reversed(current.children))
 
 
+def real_parse_error(node) -> bool:
+    """True when the tree contains an ERROR node.
+
+    `has_error` is not enough. tree-sitter-kotlin sets it on some valid
+    one-line members (a missing automatic semicolon) without inserting an
+    ERROR node, and those functions are still in the tree.
+    """
+
+    stack = [node]
+    while stack:
+        current = stack.pop()
+        if current.type == "ERROR" or current.is_error:
+            return True
+        stack.extend(current.children)
+    return False
+
+
 def child_of_type(node, *types: str):
     for child in node.children:
         if child.type in types:

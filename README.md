@@ -46,7 +46,7 @@ fun beta(items: IntArray): IntArray {
 }
 ```
 
-What stays is the call or method name, the operator, and the shape of the tree. What drops out is the local name, the field name, the literal, and the keyword. A Clojure keyword call `(:kind m)` and `(:id row)` is the same shape. So is `order.total` and `row.amount`.
+What stays is the call or method name, the operator, and the shape of the tree. What drops out is the local name, the literal, and the keyword. A Clojure keyword call `(:kind m)` and `(:id row)` is the same shape. Java, Go, Python, TypeScript, and Rust also drop the field name, so `order.total` and `row.amount` match. Kotlin keeps a property or member name, so `order.total` and `row.total` match and `order.total` and `row.amount` do not. A value passed to a call still drops, which is why `filter(xs, odd)` and `filter(items, even)` match.
 
 ## Run
 
@@ -110,9 +110,9 @@ DUPLICATE score=0.89
 | Python | functions and methods | functions nested inside another function |
 | Kotlin | functions and methods with a body, property getters and setters with a body, and a lambda or anonymous function assigned directly to a property | constructors, `init` blocks, abstract functions, and lambdas nested inside a function |
 
-Clojure reader conditionals keep the `:clj` branch, as dry4clj does. Syntax-quote is kept as a `syntax-quote` form rather than expanded. A Kotlin lambda nested in a function stays part of that function. Names on both sides of `::` stay, so a local used as that receiver is not normalized away.
+Clojure reader conditionals keep the `:clj` branch, as dry4clj does. Syntax-quote is kept as a `syntax-quote` form rather than expanded. A Kotlin lambda nested in a function stays part of that function. Names on both sides of `::` stay, so a local used as that receiver is not normalized away. Kotlin context receivers (`context(Scope)`, including a function type `context(Scope) () -> T`) are replaced with spaces before parsing, because the grammar does not accept them. The spaces keep the line numbers. A call named `context` is left as written.
 
-A missing or unreadable Clojure form is reported on stderr. Forms read before it are still compared. The run exits `0` after a report, `1` on a usage error, and `2` on an unknown `--format`.
+A missing or unreadable Clojure form is reported on stderr. A source file whose parse tree still contains an error is reported too. Forms read before the failure, or around the error, are still compared. The run exits `0` after a report, `1` on a usage error, and `2` on an unknown `--format`.
 
 ## Development
 
