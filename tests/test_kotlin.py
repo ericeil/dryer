@@ -2,7 +2,7 @@ from pathlib import Path
 
 from dryer.cli import run
 from dryer.extract import entries_in_source
-from dryer.kotlin_source import blank_context_receivers
+from dryer.kotlin_source import blank_context_receivers, prepare_kotlin
 from dryer.scan import find_duplicates
 
 
@@ -223,3 +223,96 @@ def test_the_report_prints_a_parse_warning(tmp_path: Path, capsys):
     assert run(["--root", str(tmp_path), "--min-lines", "1", "--min-nodes", "1"]) == 0
     captured = capsys.readouterr()
     assert "dryer: Broken.kt: parse error; duplicates in this file may be wrong." in captured.err
+
+
+def test_where_identifier_escaped_dollar_and_while_comparison_parse():
+    source = """
+package demo
+
+fun <T> keep(x: T): T where T : Any {
+    if (x == null) return x
+    return x
+}
+
+fun rewrite(where: List<Int>): Int {
+    if (where.none { it > 0 }) {
+        return@flatMap Stream.empty<Pair<A, B>>()
+    }
+    where.mapIndexedNotNull { index, simple ->
+        if (simple > 0) index else null
+    }
+    return where.size
+}
+
+fun pairs(): Pair<String, Int> {
+    val where = "block"
+    return where to 1
+}
+
+fun sym(name: String, args: List<String>) =
+    "${name}\\$${args.joinToString("\\$$") { it }}"
+
+fun merge(out: MutableList<Int>): Int {
+    var i = 0
+    while (i < out.size - 1) {
+        if (i > 0) return i
+        i++
+    }
+    return i
+}
+
+fun shift(by: Int) = when {
+    by < 0 -> 1
+    by > 0 -> 2
+    else -> 0
+}
+"""
+    prepared = prepare_kotlin(source)
+    assert len(prepared) == len(source)
+    assert prepared.count("\n") == source.count("\n")
+    assert "where T : Any" in prepared
+    assert "by < 0 ->" in prepared
+    assert ";where.mapIndexedNotNull" in prepared
+    assert "i<(out).size" in prepared
+    entries, warning = entries_in_source("kotlin", source, "Repairs.kt", "Repairs.kt")
+    assert warning is None
+    assert [entry.start_line for entry in entries] == [4, 9, 19, 24, 27, 36]
+    assert entries[3].start_line == 24
+
+
+def test_an_escaped_dollar_does_not_swallow_later_functions():
+    source = r"""package demo
+class Foo {
+    fun before(a: Boolean) = if (a) 1 else 0
+    val s = ",string:{pattern:RegExp(\"^\"+t.source+\"\$\"),alias:\"url\"}}},selector:{pattern:RegExp(\"(^|[{}\\\\s])[^{}\\\\s](?:[^{};\\\"'\\\\s]|\\\\s+(?![\\\\s{])|\"+t.source+\")*(?=\\\\s*\\\\{)\"),lookbehind:!0},string:{pattern:t,greedy:!0},property:{pattern:"
+    fun after(a: Boolean) = if (a) 1 else 2
+}
+fun top() = 1
+"""
+    prepared = prepare_kotlin(source)
+    assert len(prepared) == len(source)
+    assert prepared.count("\n") == source.count("\n")
+    assert "\\$" not in prepared
+    entries, warning = entries_in_source("kotlin", source, "Foo.kt", "Foo.kt")
+    assert warning is None
+    assert [entry.start_line for entry in entries] == [3, 5, 7]
+
+
+def test_a_where_parameter_and_a_parsed_comparison_stay():
+    source = """\
+fun f(
+    where: Int
+): Int {
+    return where
+}
+
+fun shift(by: Int) = when {
+    by < 0 -> 1
+    else -> 0
+}
+"""
+    prepared = prepare_kotlin(source)
+    assert prepared == source
+    entries, warning = entries_in_source("kotlin", source, "Stay.kt", "Stay.kt")
+    assert warning is None
+    assert [entry.start_line for entry in entries] == [1, 7]

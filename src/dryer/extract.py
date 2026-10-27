@@ -13,7 +13,7 @@ from __future__ import annotations
 from dryer.astnorm import normalize
 from dryer.clojure_read import is_candidate_form, max_line, normalize as normalize_clj
 from dryer.clojure_read import read_source
-from dryer.kotlin_source import blank_context_receivers
+from dryer.kotlin_source import prepare_kotlin
 from dryer.model import Entry
 from dryer.shape import fingerprints, node_count
 from dryer.treesitter import (
@@ -217,10 +217,10 @@ def _parse_warning(root) -> str | None:
 def _tree_entries(language: str, source: str, path: str, file: str) -> tuple[list[Entry], str | None]:
     grammar_or_name, pick = _PICKERS[language]
     grammar = grammar_or_name(path) if callable(grammar_or_name) else grammar_or_name
-    # Context receivers are not in the Kotlin grammar. Blanking them lets the
-    # functions inside an object be read; line numbers stay put.
+    # The Kotlin grammar misses context receivers and misreads a few
+    # statements. The preparation keeps every line number.
     if language == "kotlin":
-        source = blank_context_receivers(source)
+        source = prepare_kotlin(source)
     data, tree = parse(source, grammar)
     entries = []
     for node in pick(data, tree.root_node):
