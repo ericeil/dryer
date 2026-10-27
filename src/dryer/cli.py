@@ -23,9 +23,10 @@ Usage: dryer [options] [path-or-filter ...]
 
 Find candidate duplicate code in Clojure, Java, Go, TypeScript, Rust,
 Python, and Kotlin. Each form is normalized — call and method names, operators,
-and tree shape stay; local names, field names, and literals do not — and
-compared with the other forms of the same language. The score is Jaccard
-similarity of those structural fingerprints, the same score as dry4clj.
+and tree shape stay; local names and literals do not — and compared with the
+other forms of the same language. Kotlin also keeps the property or member
+name. The score is Jaccard similarity of those structural fingerprints, the
+same score as dry4clj.
 
 Prints a report and writes .metrics/dry.edn.
 

@@ -18,6 +18,14 @@ def display_path(path: Path, root: Path) -> str:
         return resolved.as_posix()
 
 
+def _warning_line(file: str, warning: str) -> str:
+    """`file:6: message` for a reader error, `file: message` otherwise."""
+
+    if warning[:1].isdigit():
+        return f"{file}:{warning}"
+    return f"{file}: {warning}"
+
+
 def _keep(entry: Entry, min_lines: int, min_nodes: int) -> bool:
     lines = entry.end_line - entry.start_line + 1
     return lines >= min_lines and entry.nodes >= min_nodes
@@ -36,7 +44,7 @@ def scan_files(
         file = display_path(path, root)
         found, warning = entries_in_source(language, source, path.as_posix(), file)
         if warning:
-            warnings.append(f"{file}:{warning}")
+            warnings.append(_warning_line(file, warning))
         entries.extend(entry for entry in found if _keep(entry, min_lines, min_nodes))
     return entries, warnings
 

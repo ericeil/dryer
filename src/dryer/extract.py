@@ -13,9 +13,20 @@ from __future__ import annotations
 from dryer.astnorm import normalize
 from dryer.clojure_read import is_candidate_form, max_line, normalize as normalize_clj
 from dryer.clojure_read import read_source
+from dryer.kotlin_source import blank_context_receivers
 from dryer.model import Entry
 from dryer.shape import fingerprints, node_count
-from dryer.treesitter import child_of_type, descendants, end_line, node_text, parse, start_line
+from dryer.treesitter import (
+    child_of_type,
+    descendants,
+    end_line,
+    node_text,
+    parse,
+    real_parse_error,
+    start_line,
+)
+
+_PARSE_WARNING = "parse error; duplicates in this file may be wrong."
 
 _TS_FUNCTION = {
     "function_declaration",
@@ -197,9 +208,19 @@ _PICKERS = {
 }
 
 
-def _tree_entries(language: str, source: str, path: str, file: str) -> list[Entry]:
+def _parse_warning(root) -> str | None:
+    if real_parse_error(root):
+        return _PARSE_WARNING
+    return None
+
+
+def _tree_entries(language: str, source: str, path: str, file: str) -> tuple[list[Entry], str | None]:
     grammar_or_name, pick = _PICKERS[language]
     grammar = grammar_or_name(path) if callable(grammar_or_name) else grammar_or_name
+    # Context receivers are not in the Kotlin grammar. Blanking them lets the
+    # functions inside an object be read; line numbers stay put.
+    if language == "kotlin":
+        source = blank_context_receivers(source)
     data, tree = parse(source, grammar)
     entries = []
     for node in pick(data, tree.root_node):
@@ -216,7 +237,7 @@ def _tree_entries(language: str, source: str, path: str, file: str) -> list[Entr
                 fingerprints=fingerprints(normalized),
             )
         )
-    return entries
+    return entries, _parse_warning(tree.root_node)
 
 
 def _clojure_entries(source: str, file: str) -> tuple[list[Entry], str | None]:
@@ -244,4 +265,4 @@ def entries_in_source(language: str, source: str, path: str, file: str) -> tuple
         return _clojure_entries(source, file)
     if language not in _PICKERS:
         return [], None
-    return _tree_entries(language, source, path, file), None
+    return _tree_entries(language, source, path, file)
