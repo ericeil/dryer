@@ -2,6 +2,7 @@
 
 The extensions and the skipped directories match crapper and mutator, with
 `.cljd` added because dry4clj reads it and `.kt` / `.kts` added for Kotlin.
+Test directories and test-named files are skipped unless `include_tests` is set.
 """
 
 import os
@@ -83,29 +84,33 @@ def is_test_file(path: str | Path) -> bool:
     return any(part in TEST_DIRS for part in file_path.parts)
 
 
-def _skipped_dir(name: str) -> bool:
-    return name in SKIP_DIRS or name in TEST_DIRS
+def _skipped_dir(name: str, include_tests: bool) -> bool:
+    return name in SKIP_DIRS or (not include_tests and name in TEST_DIRS)
 
 
-def _walk(root: Path) -> list[Path]:
+def _walk(root: Path, include_tests: bool) -> list[Path]:
     if not root.exists():
         return []
+    # A file named as the root is the whole selection. Directory walks apply
+    # the test filter unless this call asked to include tests.
     if root.is_file():
         return [root]
     found: list[Path] = []
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [name for name in dirnames if not _skipped_dir(name)]
+        dirnames[:] = [name for name in dirnames if not _skipped_dir(name, include_tests)]
         for name in filenames:
             path = Path(dirpath) / name
-            if language_of(path) is None or is_test_file(path):
+            if language_of(path) is None:
+                continue
+            if not include_tests and is_test_file(path):
                 continue
             found.append(path)
     return found
 
 
-def iter_source_files(roots: list[Path]) -> list[Path]:
+def iter_source_files(roots: list[Path], *, include_tests: bool = False) -> list[Path]:
     files: set[Path] = set()
     for root in roots:
-        for path in _walk(root):
+        for path in _walk(root, include_tests):
             files.add(path.resolve())
     return sorted(files, key=lambda path: path.as_posix())

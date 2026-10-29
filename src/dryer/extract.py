@@ -3,9 +3,9 @@
 Clojure compares every top-level list except `ns`, matching dry4clj. The other
 languages compare the functions and methods crapper scores: bodies, not
 signatures alone, and not callbacks nested inside another function. Rust
-functions inside `mod tests` are test code and are skipped. Kotlin also
-compares property getters and setters, and a lambda or anonymous function
-assigned directly to a property.
+functions inside `mod tests` are test code and are skipped unless tests are
+included. Kotlin also compares property getters and setters, and a lambda or
+anonymous function assigned directly to a property.
 """
 
 from __future__ import annotations
@@ -143,14 +143,14 @@ def _typescript_nodes(data: bytes, root) -> list:
     return found
 
 
-def _rust_nodes(data: bytes, root) -> list:
+def _rust_nodes(data: bytes, root, *, include_tests: bool = False) -> list:
     found = []
     for node in descendants(root):
         if node.type != "function_item" or not _has(node, "block"):
             continue
         if node.parent is not None and node.parent.type == "block":
             continue
-        if _rust_in_tests(data, node):
+        if not include_tests and _rust_in_tests(data, node):
             continue
         found.append(node)
     return found
@@ -214,7 +214,9 @@ def _parse_warning(root) -> str | None:
     return None
 
 
-def _tree_entries(language: str, source: str, path: str, file: str) -> tuple[list[Entry], str | None]:
+def _tree_entries(
+    language: str, source: str, path: str, file: str, include_tests: bool
+) -> tuple[list[Entry], str | None]:
     grammar_or_name, pick = _PICKERS[language]
     grammar = grammar_or_name(path) if callable(grammar_or_name) else grammar_or_name
     # The Kotlin grammar misses context receivers and misreads a few
@@ -222,8 +224,12 @@ def _tree_entries(language: str, source: str, path: str, file: str) -> tuple[lis
     if language == "kotlin":
         source = prepare_kotlin(source)
     data, tree = parse(source, grammar)
+    if language == "rust":
+        nodes = pick(data, tree.root_node, include_tests=include_tests)
+    else:
+        nodes = pick(data, tree.root_node)
     entries = []
-    for node in pick(data, tree.root_node):
+    for node in nodes:
         normalized = normalize(node, data)
         if normalized is None:
             continue
@@ -260,9 +266,16 @@ def _clojure_entries(source: str, file: str) -> tuple[list[Entry], str | None]:
     return entries, warning
 
 
-def entries_in_source(language: str, source: str, path: str, file: str) -> tuple[list[Entry], str | None]:
+def entries_in_source(
+    language: str,
+    source: str,
+    path: str,
+    file: str,
+    *,
+    include_tests: bool = False,
+) -> tuple[list[Entry], str | None]:
     if language == "clojure":
         return _clojure_entries(source, file)
     if language not in _PICKERS:
         return [], None
-    return _tree_entries(language, source, path, file)
+    return _tree_entries(language, source, path, file, include_tests)

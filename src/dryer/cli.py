@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from dryer.discover import SKIP_DIRS, TEST_DIRS, is_test_file, iter_source_files, language_of
@@ -13,9 +13,13 @@ from dryer.report import format_text, render_edn, write_metrics
 from dryer.scan import find_duplicates, scan_files
 
 
-def _skipped_directory_text() -> str:
-    ordered = sorted(set(SKIP_DIRS) | set(TEST_DIRS))
+def _name_list(names: set[str]) -> str:
+    ordered = sorted(names)
     return ", ".join(ordered[:-1]) + ", and " + ordered[-1]
+
+
+_NO_SOURCE = "No source files to analyze."
+_INCLUDE_TESTS_HINT = " Pass --include-tests to analyze test directories and test files."
 
 
 HELP = f"""\
@@ -41,6 +45,7 @@ Options:
                                 May be repeated.
   --changed                     Compare added and modified source files from
                                 git status.
+  --include-tests               Also analyze test directories and test files.
   --threshold N                 Minimum similarity score, default 0.82.
   --min-lines N                 Minimum source lines in a candidate form,
                                 default 4.
@@ -50,14 +55,19 @@ Options:
   --text                        Same as --format text.
 
 Arguments:
-  path              File or directory to compare. Test paths are included when
-                    you name them explicitly.
+  path              File or directory to compare. A file is included even when
+                    it is a test. A directory skips tests unless
+                    --include-tests is set.
   filter            When the argument is not a path, only source files whose
                     path contains this text are compared.
 
 With no paths, source files under the project root are compared. Directories
-named {_skipped_directory_text()} are skipped, as are *_test.go, *.test.cts,
-*.spec.cts, *.spec.ts, test_*.py, and *_test.py files.
+named {_name_list(SKIP_DIRS)} are always skipped. Directories named
+{_name_list(TEST_DIRS)} are skipped unless --include-tests is set, as are
+*_test.go, *_test.clj, *.test.ts, *.spec.ts, *.test.cts, *.spec.cts,
+test_*.py, *_test.py, and conftest.py files. Rust functions inside `mod tests`
+are skipped the same way. If that leaves nothing to analyze, the report names
+--include-tests.
 
 Clojure compares every top-level form except ns. The other languages compare
 functions and methods. A form is only compared with forms in the same language.
@@ -82,6 +92,7 @@ class Options:
     min_nodes: int = 20
     format: str = "text"
     changed: bool = False
+    include_tests: bool = False
 
 
 def _take(args: list[str], index: int, option: str) -> str:
@@ -150,6 +161,10 @@ def parse_args(argv: list[str] | None = None) -> Options:
                 continue
             if arg == "--changed":
                 options.changed = True
+                index += 1
+                continue
+            if arg == "--include-tests":
+                options.include_tests = True
                 index += 1
                 continue
             if arg.startswith("-"):
@@ -233,7 +248,7 @@ def _positionals(root: Path, args: list[str]) -> tuple[list[Path], list[str]]:
     return existing, filters
 
 
-def _tracked_source(path: Path, root: Path | None = None) -> bool:
+def _tracked_source(path: Path, root: Path | None = None, *, include_tests: bool = False) -> bool:
     parts = path.parts
     if root is not None:
         try:
@@ -244,31 +259,39 @@ def _tracked_source(path: Path, root: Path | None = None) -> bool:
         return False
     if language_of(path) is None:
         return False
-    return not is_test_file(path)
+    return include_tests or not is_test_file(path)
 
 
-def _changed_source(root: Path) -> list[Path]:
-    return [path for path in _changed_files(root) if _tracked_source(path, root)]
+def _changed_source(root: Path, *, include_tests: bool) -> list[Path]:
+    return [
+        path
+        for path in _changed_files(root)
+        if _tracked_source(path, root, include_tests=include_tests)
+    ]
 
 
-def _explicit_files(existing: list[Path]) -> list[Path]:
+def _explicit_files(existing: list[Path], *, include_tests: bool) -> list[Path]:
     files: list[Path] = []
     for path in existing:
         if path.is_dir():
-            files.extend(iter_source_files([path]))
+            files.extend(iter_source_files([path], include_tests=include_tests))
         elif language_of(path) is not None:
+            # A named file is the whole selection, test or not. A directory is
+            # still filtered unless --include-tests is set.
             files.append(path)
     return files
 
 
 def _selected(options: Options, root: Path, existing: list[Path]) -> list[Path]:
+    include_tests = options.include_tests
     if options.changed:
-        return _changed_source(root)
+        return _changed_source(root, include_tests=include_tests)
     if options.source_roots:
-        return iter_source_files([(root / path).resolve() for path in options.source_roots])
+        roots = [(root / path).resolve() for path in options.source_roots]
+        return iter_source_files(roots, include_tests=include_tests)
     if existing:
-        return _explicit_files(existing)
-    return iter_source_files([root])
+        return _explicit_files(existing, include_tests=include_tests)
+    return iter_source_files([root], include_tests=include_tests)
 
 
 def _apply_filters(files: list[Path], filters: list[str]) -> list[Path]:
@@ -282,6 +305,12 @@ def select_files(options: Options) -> list[Path]:
     existing, filters = _positionals(root, options.positionals)
     files = _apply_filters(_selected(options, root, existing), filters)
     return sorted({path.resolve() for path in files}, key=lambda path: path.as_posix())
+
+
+def _empty_report(options: Options) -> str:
+    if options.include_tests or not select_files(replace(options, include_tests=True)):
+        return _NO_SOURCE
+    return _NO_SOURCE + _INCLUDE_TESTS_HINT
 
 
 def run(argv: list[str] | None = None) -> int:
@@ -301,10 +330,12 @@ def run(argv: list[str] | None = None) -> int:
         print(exc.message, file=sys.stderr)
         return exc.code
     if not files:
-        print("No source files to analyze.")
+        print(_empty_report(options))
         return 0
 
-    entries, warnings = scan_files(files, root, options.min_lines, options.min_nodes)
+    entries, warnings = scan_files(
+        files, root, options.min_lines, options.min_nodes, include_tests=options.include_tests
+    )
     for warning in warnings:
         print(f"dryer: {warning}", file=sys.stderr)
     candidates = find_duplicates(entries, options.threshold)

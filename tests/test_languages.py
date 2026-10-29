@@ -370,14 +370,21 @@ def test_a_different_callee_name_lowers_the_score(tmp_path):
     assert all(item.score < 1.0 for item in found)
 
 
-def forms(language: str, source: str, file: str) -> list[Entry]:
-    entries, warning = entries_in_source(language, source, file, file)
+def forms(language: str, source: str, file: str, *, include_tests: bool = False) -> list[Entry]:
+    entries, warning = entries_in_source(
+        language, source, file, file, include_tests=include_tests
+    )
     assert warning is None
     return entries
 
 
-def spans(language: str, source: str, file: str) -> list[tuple[int, int]]:
-    return [(entry.start_line, entry.end_line) for entry in forms(language, source, file)]
+def spans(
+    language: str, source: str, file: str, *, include_tests: bool = False
+) -> list[tuple[int, int]]:
+    return [
+        (entry.start_line, entry.end_line)
+        for entry in forms(language, source, file, include_tests=include_tests)
+    ]
 
 
 def test_a_parenthesized_callee_matches_the_bare_call():
@@ -547,6 +554,32 @@ mod tests {
 """,
         "a.rs",
     ) == [(3, 5), (8, 10)]
+
+
+def test_include_tests_keeps_rust_functions_inside_mod_tests():
+    source = """\
+fn alpha(xs: Vec<i32>) -> usize {
+    xs.len()
+}
+
+mod tests {
+    fn gamma(xs: Vec<i32>) -> usize {
+        xs.len()
+    }
+
+    fn delta(items: Vec<i32>) -> usize {
+        items.len()
+    }
+}
+"""
+    assert spans("rust", source, "a.rs") == [(1, 3)]
+    assert spans("rust", source, "a.rs", include_tests=True) == [(1, 3), (6, 8), (10, 12)]
+    hidden = forms("rust", source, "a.rs")
+    assert find_duplicates(hidden, threshold=0.99) == []
+    found = find_duplicates(forms("rust", source, "a.rs", include_tests=True), threshold=0.99)
+    pairs = {(item.left.start_line, item.right.start_line) for item in found}
+    assert (6, 10) in pairs
+    assert all(item.score == 1.0 for item in found)
 
 
 def test_typescript_keeps_methods_and_skips_nested_functions():
