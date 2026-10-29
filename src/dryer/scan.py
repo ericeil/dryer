@@ -32,7 +32,12 @@ def _keep(entry: Entry, min_lines: int, min_nodes: int) -> bool:
 
 
 def scan_files(
-    files: list[Path], root: Path, min_lines: int, min_nodes: int
+    files: list[Path],
+    root: Path,
+    min_lines: int,
+    min_nodes: int,
+    *,
+    include_tests: bool = False,
 ) -> tuple[list[Entry], list[str]]:
     entries: list[Entry] = []
     warnings: list[str] = []
@@ -42,7 +47,9 @@ def scan_files(
             continue
         source = path.read_text(encoding="utf-8", errors="replace")
         file = display_path(path, root)
-        found, warning = entries_in_source(language, source, path.as_posix(), file)
+        found, warning = entries_in_source(
+            language, source, path.as_posix(), file, include_tests=include_tests
+        )
         if warning:
             warnings.append(_warning_line(file, warning))
         entries.extend(entry for entry in found if _keep(entry, min_lines, min_nodes))

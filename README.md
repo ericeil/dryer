@@ -54,7 +54,7 @@ What stays is the call or method name, the operator, and the shape of the tree. 
 ./dryer
 ```
 
-The first run creates `.venv` and installs the tool. From a project root it walks the tree, skips `test`, `spec`, `vendor`, `node_modules`, and `target`, and writes two results:
+The first run creates `.venv` and installs the tool. From a project root it walks the tree, skips test directories (`test`, `tests`, `spec`, `specs`, `__tests__`) and test-named files (`*_test.go`, `*_test.py`, `test_*.py`, `*.test.ts`, and the same idea in the other languages), along with `vendor`, `node_modules`, `target`, and `testdata`, and writes two results:
 
 - a report on stdout, closest match first
 - `.metrics/dry.edn`, replaced on every successful analysis
@@ -65,9 +65,12 @@ The first run creates `.venv` and installs the tool. From a project root it walk
 ./dryer billing                  # path fragment
 ./dryer --threshold 0.9 src
 ./dryer --edn --min-lines 3 src
+./dryer --include-tests          # test directories and test files too
+./dryer --include-tests src/test
 ```
 
 ```text
+--include-tests  Also analyze test directories, test-named files, and Rust `mod tests`
 --threshold N    Minimum structural similarity score, default 0.82
 --min-lines N    Minimum source lines in a candidate form, default 4
 --min-nodes N    Minimum normalized syntax nodes, default 20
@@ -75,6 +78,10 @@ The first run creates `.venv` and installs the tool. From a project root it walk
 --edn            Same as --format edn
 --text           Same as --format text
 ```
+
+`--include-tests` is off by default, so a normal run still ignores tests. Passing a test file analyzes that file: the file is the whole selection. Passing a test directory does not. The directory walk keeps the same filter, and when that leaves no source files the report says to pass `--include-tests`. One switch covers `src/test`, `tests`, `spec`, `specs`, `__tests__`, and names such as `foo_test.go`, `test_foo.py`, `*_test.clj`, and `*.test.ts`.
+
+A Kotlin name like `FooTest.kt` is not a separate exclusion. The file is skipped when it lives in a test directory, and `--include-tests` includes that directory. `testdata` stays skipped either way; it is grouped with build and vendor trees, not with test sources. Rust functions nested in `mod tests` follow the same switch, including when the surrounding file is already part of the run.
 
 Normalized syntax nodes are the structural pieces left after incidental names and literals are replaced. `--min-nodes` drops forms smaller than that before comparison.
 
@@ -106,7 +113,7 @@ DUPLICATE score=0.89
 | Java | methods with a body | constructors, abstract methods, methods inside anonymous or local classes |
 | Go | functions and methods with a body | function literals stay inside the enclosing function |
 | TypeScript | functions, methods, and top-level arrow functions | callbacks nested inside another function |
-| Rust | functions and methods with a body | functions inside `mod tests`, and closures |
+| Rust | functions and methods with a body | closures. Functions inside `mod tests` are left out unless `--include-tests` is set |
 | Python | functions and methods | functions nested inside another function |
 | Kotlin | functions and methods with a body, property getters and setters with a body, and a lambda or anonymous function assigned directly to a property | constructors, `init` blocks, abstract functions, and lambdas nested inside a function |
 

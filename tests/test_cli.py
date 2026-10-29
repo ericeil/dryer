@@ -43,6 +43,7 @@ def test_help_does_not_scan(capsys):
     assert "__pycache__" in out
     assert ".test.cts" in out
     assert "--threshold" in out
+    assert "--include-tests" in out
 
 
 def test_unknown_format(capsys):
@@ -65,6 +66,8 @@ def test_parse_defaults_and_flags():
     assert options.min_nodes == 30
     assert options.format == "edn"
     assert options.positionals == ["spec"]
+    assert options.include_tests is False
+    assert parse_args(["--include-tests", "src"]).include_tests is True
 
 
 def test_project_report_and_snapshot(tmp_path, capsys):
@@ -330,6 +333,116 @@ def test_changed_source_skips_unknown_and_test_files(tmp_path):
     assert _tracked_source(tmp_path / "tests" / "test_a.py") is False
     assert _tracked_source(tmp_path / "src" / "a.py") is True
     assert _tracked_source(tmp_path / "target" / "app.py") is False
+
+
+def test_include_tests_brings_back_every_test_exclusion(tmp_path):
+    names = [
+        "pkg/foo_test.go",
+        "src/app_test.clj",
+        "src/app_test.cljc",
+        "src/app_test.cljs",
+        "src/app_test.cljd",
+        "src/app_test.bb",
+        "ui/a.test.ts",
+        "ui/a.spec.ts",
+        "ui/a.test.tsx",
+        "ui/a.spec.tsx",
+        "ui/a.test.mts",
+        "ui/a.spec.mts",
+        "ui/a.test.cts",
+        "ui/a.spec.cts",
+        "tests/conftest.py",
+        "pkg/foo_test.py",
+        "pkg/test_foo.py",
+        "tests/app.py",
+        "src/test/FooTest.kt",
+        "src/tests/Bar.kt",
+        "spec/demo.clj",
+        "specs/demo.py",
+        "web/__tests__/a.ts",
+        "src/main/FooTest.kt",
+        "src/app.py",
+        "target/app.py",
+        "src/testdata/fixture.py",
+    ]
+    for name in names:
+        write_source(tmp_path, name, "x = 1\n")
+    default = [path.relative_to(tmp_path).as_posix() for path in iter_source_files([tmp_path])]
+    assert default == ["src/app.py", "src/main/FooTest.kt"]
+    included = [
+        path.relative_to(tmp_path).as_posix()
+        for path in iter_source_files([tmp_path], include_tests=True)
+    ]
+    always_skipped = {"target/app.py", "src/testdata/fixture.py"}
+    assert included == sorted(name for name in names if name not in always_skipped)
+
+
+def test_a_named_test_file_is_included_without_the_flag(tmp_path):
+    write_source(tmp_path, "src/test/FooTest.kt", "fun alpha() = 1\n")
+    options = parse_args(["--root", str(tmp_path), "--source-root", "src/test/FooTest.kt"])
+    files = [path.relative_to(tmp_path).as_posix() for path in select_files(options)]
+    assert files == ["src/test/FooTest.kt"]
+
+
+def test_a_test_directory_stays_out_until_the_flag_is_set(tmp_path, capsys):
+    body = "def alpha(xs):\n    ys = filter(xs, odd)\n    zs = map(ys, inc)\n    return list(zs)\n"
+    other = "def beta(items):\n    kept = filter(items, even)\n    out = map(kept, dec)\n    return list(out)\n"
+    write_source(tmp_path, "src/test/a.py", body)
+    write_source(tmp_path, "src/test/b.py", other)
+    write_source(tmp_path, "src/main/App.kt", "fun alpha() = 1\n")
+    args = ["--root", str(tmp_path), "--min-lines", "3", "--min-nodes", "1", "src/test"]
+    assert run(args) == 0
+    skipped = capsys.readouterr()
+    assert skipped.out == (
+        "No source files to analyze. "
+        "Pass --include-tests to analyze test directories and test files.\n"
+    )
+    assert run(args + ["--include-tests"]) == 0
+    found = capsys.readouterr().out
+    assert "DUPLICATE score=1.00" in found
+    assert "src/test/a.py" in found
+    assert "src/test/b.py" in found
+
+
+def test_include_tests_on_an_empty_tree_does_not_add_the_hint(tmp_path, capsys):
+    assert run(["--root", str(tmp_path), "--include-tests"]) == 0
+    assert capsys.readouterr().out == "No source files to analyze.\n"
+
+
+def test_a_build_directory_does_not_suggest_include_tests(tmp_path, capsys):
+    write_source(tmp_path, "target/App.kt", "fun alpha() = 1\n")
+    write_source(tmp_path, "src/testdata/fixture.py", "x = 1\n")
+    assert run(["--root", str(tmp_path)]) == 0
+    assert capsys.readouterr().out == "No source files to analyze.\n"
+
+
+def test_include_tests_keeps_changed_test_files(tmp_path, capsys):
+    body = "def alpha(xs):\n    ys = filter(xs, odd)\n    zs = map(ys, inc)\n    return list(zs)\n"
+    other = "def beta(items):\n    kept = filter(items, even)\n    out = map(kept, dec)\n    return list(out)\n"
+    _init_repo(tmp_path)
+    write_source(tmp_path, "src/keep.py", "x = 1\n")
+    _commit(tmp_path, "base")
+    write_source(tmp_path, "src/a.py", body)
+    write_source(tmp_path, "tests/test_a.py", other)
+    args = ["--root", str(tmp_path), "--changed", "--min-lines", "3", "--min-nodes", "1"]
+    assert run(args) == 0
+    assert "test_a.py" not in capsys.readouterr().out
+    assert run(args + ["--include-tests"]) == 0
+    out = capsys.readouterr().out
+    assert "src/a.py" in out
+    assert "tests/test_a.py" in out
+
+
+def test_only_a_changed_test_hints_at_the_option(tmp_path, capsys):
+    _init_repo(tmp_path)
+    write_source(tmp_path, "src/keep.py", "x = 1\n")
+    _commit(tmp_path, "base")
+    write_source(tmp_path, "pkg/foo_test.go", "package pkg\n")
+    assert run(["--root", str(tmp_path), "--changed"]) == 0
+    assert capsys.readouterr().out == (
+        "No source files to analyze. "
+        "Pass --include-tests to analyze test directories and test files.\n"
+    )
 
 
 def test_test_files_and_skipped_directories_are_left_out(tmp_path):
